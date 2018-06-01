@@ -53,10 +53,11 @@ class IOBuf {
 friend class IOBufAsZeroCopyInputStream;
 friend class IOBufAsZeroCopyOutputStream;
 public:
+    static const size_t BLOCK_HEADER_SIZE = 32; /*impl dependent*/
     static const size_t DEFAULT_BLOCK_SIZE = 8192;
-    static const size_t DEFAULT_PAYLOAD = DEFAULT_BLOCK_SIZE - 16/*impl dependent*/;
+    static const size_t DEFAULT_PAYLOAD = DEFAULT_BLOCK_SIZE - BLOCK_HEADER_SIZE;
     static const size_t MAX_BLOCK_SIZE = (1 << 16);
-    static const size_t MAX_PAYLOAD = MAX_BLOCK_SIZE - 16/*impl dependent*/;
+    static const size_t MAX_PAYLOAD = MAX_BLOCK_SIZE - BLOCK_HEADER_SIZE;
     static const size_t INITIAL_CAP = 32; // must be power of 2
 
     struct Block;
@@ -199,6 +200,11 @@ public:
     // Append a character to back side. (with copying)
     // Returns 0 on success, -1 otherwise.
     int push_back(char c);
+
+    // Append `data` with `count` bytes to back side. (without copying)
+    // Return 0 on success, -1 otherwise.
+    // Note: Block does not own memory if you use append_zero_copy.
+    int append_zero_copy(void const* data, size_t count);
     
     // Append `data' with `count' bytes to back side. (with copying)
     // Returns 0 on success(include count == 0), -1 otherwise.

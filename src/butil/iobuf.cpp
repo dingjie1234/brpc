@@ -232,15 +232,20 @@ size_t IOBuf::new_bigview_count() {
 
 struct IOBuf::Block {
     butil::atomic<int> nshared;
-    uint16_t size;
-    uint16_t cap;
+    uint32_t size;
+    uint32_t cap;
+    bool own_data;
+    char pad[3];
     Block* portal_next;
-    char data[0];
+    char* data;
         
-    explicit Block(size_t block_size)
-        : nshared(1), size(0), cap(block_size - offsetof(Block, data))
-        , portal_next(NULL) {
-        assert(block_size <= MAX_BLOCK_SIZE);
+    explicit Block(size_t block_size, bool is_owner = true)
+        : nshared(1), size(0), cap(block_size - IOBuf::BLOCK_HEADER_SIZE)
+        , own_data(is_owner), portal_next(NULL), data(NULL) {
+        if (!own_data) {
+            return;
+        }
+        data = (char*)((char*)this + IOBuf::BLOCK_HEADER_SIZE);
         iobuf::g_nblock.fetch_add(1, butil::memory_order_relaxed);
         iobuf::g_blockmem.fetch_add(block_size, butil::memory_order_relaxed);
     }
@@ -250,10 +255,20 @@ struct IOBuf::Block {
     }
         
     void dec_ref() {
+        if (!own_data) {
+            // Since nshared is set 1 in Constructor, nshared re-set to 1
+            // means the Block is derefed by the last IOBuf who used to ref
+            // it. For Block who does not own data, deleted the Blcok here.
+            if (nshared.fetch_sub(1, butil::memory_order_release) == 2) {
+                this->~Block();
+                /* data is not owned by Block */
+            }
+            return;
+        }
         if (nshared.fetch_sub(1, butil::memory_order_release) == 1) {
             butil::atomic_thread_fence(butil::memory_order_acquire);
             iobuf::g_nblock.fetch_sub(1, butil::memory_order_relaxed);
-            iobuf::g_blockmem.fetch_sub(cap + offsetof(Block, data),
+            iobuf::g_blockmem.fetch_sub(cap + IOBuf::BLOCK_HEADER_SIZE,
                                         butil::memory_order_relaxed);
             this->~Block();
             iobuf::blockmem_deallocate(this);
@@ -277,7 +292,7 @@ IOBuf::Block* get_portal_next(IOBuf::Block const* b) {
     return b->portal_next;
 }
 
-uint16_t block_cap(IOBuf::Block const *b) {
+uint32_t block_cap(IOBuf::Block const *b) {
     return b->cap;
 }
 
@@ -1092,6 +1107,21 @@ int IOBuf::push_back(char c) {
     return 0;
 }
 
+int IOBuf::append_zero_copy(void const* data, size_t count) {
+    if (BAIDU_UNLIKELY(!data || count <= 0)) {
+        return -1;
+    }    
+    IOBuf::Block* b = new IOBuf::Block(count + IOBuf::BLOCK_HEADER_SIZE, false);
+    if (BAIDU_UNLIKELY(!b)) {
+        return -1;
+    }    
+    b->data = (char *)data;
+    const IOBuf::BlockRef r = { b->size, b->cap, b }; 
+    _push_back_ref(r);
+
+    return 0;
+}
+
 int IOBuf::append(char const* s) {
     if (BAIDU_LIKELY(s != NULL)) {
         return append(s, strlen(s));
@@ -1744,7 +1774,7 @@ IOBufAsZeroCopyOutputStream::IOBufAsZeroCopyOutputStream(
     , _cur_block(NULL)
     , _byte_count(0) {
     
-    if (_block_size <= offsetof(IOBuf::Block, data)) {
+    if (_block_size <= IOBuf::BLOCK_HEADER_SIZE) { /* impl dependent */
         throw std::invalid_argument("block_size is too small");
     }
 }
