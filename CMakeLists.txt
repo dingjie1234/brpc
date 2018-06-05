@@ -25,6 +25,7 @@ option(DEBUG "Print debug logs" OFF)
 option(WITH_DEBUG_SYMBOLS "With debug symbols" ON)
 option(BRPC_WITH_THRIFT "With thrift framed protocol supported" OFF)
 option(BUILD_UNIT_TESTS "Whether to build unit tests" OFF)
+option(BUILD_BENCHMARK "Whether to build benchmark" ON)
 
 set(WITH_GLOG_VAL "0")
 if(BRPC_WITH_GLOG)
@@ -372,6 +373,9 @@ set(SOURCES
 add_subdirectory(src)
 if(BUILD_UNIT_TESTS)
     add_subdirectory(test)
+endif()
+if(BUILD_BENCHMARK)
+    add_subdirectory(benchmark)
 endif()
 add_subdirectory(tools)
 
