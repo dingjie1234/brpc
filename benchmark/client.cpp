@@ -25,7 +25,7 @@ DEFINE_int32(thread_num, 1, "Number of threads to send requests");
 DEFINE_int32(attachment_size, 0, "Carry so many kilobyte attachment along with requests");
 DEFINE_string(connection_type, "pooled", "Connection type. Available values: single, pooled, short");
 DEFINE_string(server, "0.0.0.0:8002", "IP Address of server");
-DEFINE_int32(timeout_ms, 100, "RPC timeout in milliseconds");
+DEFINE_int32(timeout_ms, -1, "RPC timeout in milliseconds");
 DEFINE_int32(max_retry, 3, "Max retries(not including the first RPC)"); 
 DEFINE_bool(dont_fail, false, "Print fatal when some call failed");
 DEFINE_int32(dummy_port, -1, "Launch dummy server at this port");
@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
     brpc::ChannelOptions options;
     options.protocol = "baidu_std";
     options.connection_type = FLAGS_connection_type;
-    options.connect_timeout_ms = std::min(FLAGS_timeout_ms / 2, 100);
+    options.connect_timeout_ms = 100;
     options.timeout_ms = FLAGS_timeout_ms/*milliseconds*/;
     options.max_retry = FLAGS_max_retry;
     for (int i = 0; i < FLAGS_thread_num; ++i) {
@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
         << "loops=" << FLAGS_iterations << " "
         << "thread_num=" << FLAGS_thread_num << " "
         << "attachment_size=" << FLAGS_attachment_size << "KB "
-        << "throughput=" << throughput << "MB/s";
+        << "throughput=" << throughput / 1.048576 << "MB/s";
     
     delete g_mem;
     g_mem = NULL;
