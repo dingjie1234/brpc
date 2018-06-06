@@ -236,12 +236,13 @@ struct IOBuf::Block {
     uint32_t cap;
     bool own_data;
     char pad[3];
+    void (*destroy)(void*);
     Block* portal_next;
     char* data;
         
     explicit Block(size_t block_size, bool is_owner = true)
         : nshared(1), size(0), cap(block_size - IOBuf::BLOCK_HEADER_SIZE)
-        , own_data(is_owner), portal_next(NULL), data(NULL) {
+        , own_data(is_owner), destroy(NULL), portal_next(NULL), data(NULL) {
         if (!own_data) {
             return;
         }
@@ -260,8 +261,10 @@ struct IOBuf::Block {
             // means the Block is derefed by the last IOBuf who used to ref
             // it. For Block who does not own data, deleted the Blcok here.
             if (nshared.fetch_sub(1, butil::memory_order_release) == 2) {
+                if (destroy) {
+                    destroy((void *)data);
+                }
                 this->~Block();
-                /* data is not owned by Block */
             }
             return;
         }
@@ -1107,7 +1110,7 @@ int IOBuf::push_back(char c) {
     return 0;
 }
 
-int IOBuf::append_zero_copy(void const* data, size_t count) {
+int IOBuf::append_zero_copy(void const* data, size_t count, void (*cb)(void*)) {
     if (BAIDU_UNLIKELY(!data || count <= 0)) {
         return -1;
     }    
@@ -1116,6 +1119,7 @@ int IOBuf::append_zero_copy(void const* data, size_t count) {
         return -1;
     }    
     b->data = (char *)data;
+    b->destroy = cb;
     const IOBuf::BlockRef r = { b->size, b->cap, b }; 
     _push_back_ref(r);
 

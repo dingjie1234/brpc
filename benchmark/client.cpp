@@ -61,9 +61,8 @@ static void* sender(void* arg) {
 
     int log_id = 0;
     int loop = FLAGS_iterations;
-    char* str = (char*)malloc(FLAGS_attachment_size * 1024);
     char* tmp = (char*)malloc(FLAGS_attachment_size * 1024);
-    if (!str || !tmp) {
+    if (!tmp) {
         LOG(ERROR) << "Can not allocate memory";
     }
     while (!brpc::IsAskedToQuit() && loop > 0) {
@@ -74,8 +73,12 @@ static void* sender(void* arg) {
 
         cntl.set_log_id(log_id++);
         //cntl.request_attachment().append(g_attachment);
+        char* str = (char*)malloc(FLAGS_attachment_size * 1024);
+        if (!str) {
+            LOG(ERROR) << "Can not allocate memory";
+        }
         initiate_buffer(str, FLAGS_attachment_size * 1024);
-        cntl.request_attachment().append_zero_copy(str, FLAGS_attachment_size * 1024);
+        cntl.request_attachment().append_zero_copy(str, FLAGS_attachment_size * 1024, free);
         stub.Echo(&cntl, &request, &response, NULL);
         if (cntl.Failed()) {
             CHECK(brpc::IsAskedToQuit() || !FLAGS_dont_fail)
@@ -91,7 +94,6 @@ static void* sender(void* arg) {
         loop--;
     }
     free(tmp);
-    free(str);
     return NULL;
 }
 
