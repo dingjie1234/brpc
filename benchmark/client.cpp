@@ -32,13 +32,40 @@ DEFINE_int32(dummy_port, -1, "Launch dummy server at this port");
 DEFINE_int32(iterations, 300, "Loop times");
 
 std::string g_attachment;
-char* g_mem = NULL;
+
+void initiate_buffer(char *buf, int size) {
+    unsigned long flag = rand() % 3;
+    switch (flag) {
+        case 0: {
+            buf[0] = 'A' + rand() % 26;
+            break;
+        }
+        case 1: {
+            buf[0] = 'a' + rand() % 26;
+            break;
+        }
+        case 2: {
+            buf[0] = '0' + rand() % 10;
+            break;
+        }
+        default:
+            buf[0] = 'x';
+    }
+    for (int i = 1; i < size; ++i) {
+        buf[i] = buf[0];
+    }
+}
 
 static void* sender(void* arg) {
     example::EchoService_Stub stub(static_cast<google::protobuf::RpcChannel*>(arg));
 
     int log_id = 0;
     int loop = FLAGS_iterations;
+    char* str = (char*)malloc(FLAGS_attachment_size * 1024);
+    char* tmp = (char*)malloc(FLAGS_attachment_size * 1024);
+    if (!str || !tmp) {
+        LOG(ERROR) << "Can not allocate memory";
+    }
     while (!brpc::IsAskedToQuit() && loop > 0) {
         example::EchoRequest request;
         example::EchoResponse response;
@@ -47,15 +74,24 @@ static void* sender(void* arg) {
 
         cntl.set_log_id(log_id++);
         //cntl.request_attachment().append(g_attachment);
-        cntl.request_attachment().append_zero_copy(g_mem, FLAGS_attachment_size * 1024);
+        initiate_buffer(str, FLAGS_attachment_size * 1024);
+        cntl.request_attachment().append_zero_copy(str, FLAGS_attachment_size * 1024);
         stub.Echo(&cntl, &request, &response, NULL);
         if (cntl.Failed()) {
             CHECK(brpc::IsAskedToQuit() || !FLAGS_dont_fail)
                 << "error=" << cntl.ErrorText() << " latency=" << cntl.latency_us();
             bthread_usleep(50000);
+        } else {
+            // if you want to get best performance, you can skip check and delete it.
+            cntl.response_attachment().copy_to((void*)tmp, cntl.response_attachment().length());
+            if (memcmp((const void*)str, (const void*)tmp, FLAGS_attachment_size * 1024)) {
+                LOG(FATAL) << "data incorrect!!!";
+            }
         }
         loop--;
     }
+    free(tmp);
+    free(str);
     return NULL;
 }
 
@@ -85,10 +121,6 @@ int main(int argc, char* argv[]) {
         brpc::StartDummyServerAt(FLAGS_dummy_port);
     }
     
-    // allocate g_mem;
-    g_mem = (char*)new char[FLAGS_attachment_size * 1024];
-    memset(g_mem, '0', FLAGS_attachment_size * 1024);
-
     std::vector<bthread_t> tids;
     tids.resize(FLAGS_thread_num);
 
@@ -112,8 +144,5 @@ int main(int argc, char* argv[]) {
         << "attachment_size=" << FLAGS_attachment_size << "KB "
         << "throughput=" << throughput / 1.048576 << "MB/s";
     
-    delete g_mem;
-    g_mem = NULL;
-
     return 0;
 }
