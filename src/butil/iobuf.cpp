@@ -264,7 +264,7 @@ struct IOBuf::Block {
                 if (destroy) {
                     destroy((void *)data);
                 }
-                this->~Block();
+                delete this;
             }
             return;
         }
