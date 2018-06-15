@@ -78,7 +78,7 @@ static void* sender(void* arg) {
             LOG(ERROR) << "Can not allocate memory";
         }
         initiate_buffer(str, FLAGS_attachment_size * 1024);
-        cntl.request_attachment().append_zero_copy(str, FLAGS_attachment_size * 1024, free);
+        cntl.request_attachment().append_zerocopy(str, FLAGS_attachment_size * 1024, free);
         stub.Echo(&cntl, &request, &response, NULL);
         if (cntl.Failed()) {
             CHECK(brpc::IsAskedToQuit() || !FLAGS_dont_fail)
@@ -88,7 +88,8 @@ static void* sender(void* arg) {
             // if you want to get best performance, you can skip check and delete it.
             cntl.response_attachment().copy_to((void*)tmp, cntl.response_attachment().length());
             if (memcmp((const void*)str, (const void*)tmp, FLAGS_attachment_size * 1024)) {
-                LOG(FATAL) << "data incorrect!!!";
+                LOG(FATAL) << "data incorrect! " << 
+                    "Check whether echo_attachment is set true in server side";
             }
         }
         loop--;

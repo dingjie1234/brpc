@@ -234,19 +234,18 @@ struct IOBuf::Block {
     butil::atomic<int> nshared;
     uint32_t size;
     uint32_t cap;
-    bool own_data;
-    char pad[3];
-    void (*destroy)(void*);
     Block* portal_next;
+    void (*release_cb)(void*);
     char* data;
         
-    explicit Block(size_t block_size, bool is_owner = true)
-        : nshared(1), size(0), cap(block_size - IOBuf::BLOCK_HEADER_SIZE)
-        , own_data(is_owner), destroy(NULL), portal_next(NULL), data(NULL) {
-        if (!own_data) {
+    explicit Block(size_t block_size, bool inner_mem = true)
+        : nshared((inner_mem) ? 1 : 0), size(0), cap(block_size - sizeof(IOBuf::Block))
+        , portal_next(NULL), release_cb(NULL), data(NULL) {
+        assert(block_size <= (MAX_BLOCK_SIZE + sizeof(IOBuf::Block)));
+        if (!inner_mem) {
             return;
         }
-        data = (char*)((char*)this + IOBuf::BLOCK_HEADER_SIZE);
+        data = (char*)((char*)this + sizeof(IOBuf::Block));
         iobuf::g_nblock.fetch_add(1, butil::memory_order_relaxed);
         iobuf::g_blockmem.fetch_add(block_size, butil::memory_order_relaxed);
     }
@@ -256,22 +255,19 @@ struct IOBuf::Block {
     }
         
     void dec_ref() {
-        if (!own_data) {
-            // Since nshared is set 1 in Constructor, nshared re-set to 1
-            // means the Block is derefed by the last IOBuf who used to ref
-            // it. For Block who does not own data, deleted the Blcok here.
-            if (nshared.fetch_sub(1, butil::memory_order_release) == 2) {
-                if (destroy) {
-                    destroy((void *)data);
-                }
-                delete this;
-            }
-            return;
-        }
         if (nshared.fetch_sub(1, butil::memory_order_release) == 1) {
+            if (this->data != ((char*)this + sizeof(IOBuf::Block))) {
+                // mean `data` memory is not allocated in IOBuf
+                if (release_cb) {
+                    release_cb((void *)data);
+                }
+                this->~Block();
+                iobuf::blockmem_deallocate(this);
+                return;
+            }
             butil::atomic_thread_fence(butil::memory_order_acquire);
             iobuf::g_nblock.fetch_sub(1, butil::memory_order_relaxed);
-            iobuf::g_blockmem.fetch_sub(cap + IOBuf::BLOCK_HEADER_SIZE,
+            iobuf::g_blockmem.fetch_sub(cap + sizeof(IOBuf::Block),
                                         butil::memory_order_relaxed);
             this->~Block();
             iobuf::blockmem_deallocate(this);
@@ -299,10 +295,11 @@ uint32_t block_cap(IOBuf::Block const *b) {
     return b->cap;
 }
 
-inline IOBuf::Block* create_block(const size_t block_size) {
-    void* mem = iobuf::blockmem_allocate(block_size);
+inline IOBuf::Block* create_block(const size_t block_size, bool inner_mem = true) {
+    size_t alloc_size = (inner_mem) ? block_size : sizeof(IOBuf::Block);
+    void* mem = iobuf::blockmem_allocate(alloc_size);
     if (BAIDU_LIKELY(mem != NULL)) {
-        return new (mem) IOBuf::Block(block_size);
+        return new (mem) IOBuf::Block(block_size, inner_mem);
     }
     return NULL;
 }
@@ -1110,16 +1107,16 @@ int IOBuf::push_back(char c) {
     return 0;
 }
 
-int IOBuf::append_zero_copy(void const* data, size_t count, void (*cb)(void*)) {
+int IOBuf::append_zerocopy(void const* data, size_t count, void (*cb)(void*)) {
     if (BAIDU_UNLIKELY(!data || count <= 0)) {
         return -1;
     }    
-    IOBuf::Block* b = new IOBuf::Block(count + IOBuf::BLOCK_HEADER_SIZE, false);
+    IOBuf::Block* b = iobuf::create_block(count + sizeof(IOBuf::Block), false);
     if (BAIDU_UNLIKELY(!b)) {
         return -1;
     }    
     b->data = (char *)data;
-    b->destroy = cb;
+    b->release_cb = cb;
     const IOBuf::BlockRef r = { b->size, b->cap, b }; 
     _push_back_ref(r);
 
@@ -1778,7 +1775,7 @@ IOBufAsZeroCopyOutputStream::IOBufAsZeroCopyOutputStream(
     , _cur_block(NULL)
     , _byte_count(0) {
     
-    if (_block_size <= IOBuf::BLOCK_HEADER_SIZE) { /* impl dependent */
+    if (_block_size <= sizeof(IOBuf::Block)) { /* impl dependent */
         throw std::invalid_argument("block_size is too small");
     }
 }
